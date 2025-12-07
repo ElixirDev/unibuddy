@@ -2,10 +2,12 @@
 const path = require("path");
 require("dotenv").config();
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 // Environment variable overrides
 const config = {
-  disableHotReload: process.env.DISABLE_HOT_RELOAD === "true",
-  enableVisualEdits: process.env.REACT_APP_ENABLE_VISUAL_EDITS === "true",
+  disableHotReload: process.env.DISABLE_HOT_RELOAD === "true" || isProduction,
+  enableVisualEdits: process.env.REACT_APP_ENABLE_VISUAL_EDITS === "true" && !isProduction,
   enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "true",
 };
 
@@ -36,12 +38,33 @@ const webpackConfig = {
     },
     configure: (webpackConfig) => {
 
-      // Disable hot reload completely if environment variable is set
-      if (config.disableHotReload) {
+      // Disable hot reload and react-refresh in production
+      if (config.disableHotReload || isProduction) {
         // Remove hot reload related plugins
         webpackConfig.plugins = webpackConfig.plugins.filter(plugin => {
-          return !(plugin.constructor.name === 'HotModuleReplacementPlugin');
+          const name = plugin.constructor.name;
+          return !(name === 'HotModuleReplacementPlugin' || name === 'ReactRefreshPlugin');
         });
+
+        // Remove react-refresh from babel-loader options in webpack rules
+        const removeReactRefresh = (rules) => {
+          if (!rules) return;
+          rules.forEach(rule => {
+            if (rule.oneOf) removeReactRefresh(rule.oneOf);
+            if (rule.use) {
+              const useArray = Array.isArray(rule.use) ? rule.use : [rule.use];
+              useArray.forEach(loader => {
+                if (loader.loader && loader.loader.includes('babel-loader') && loader.options && loader.options.plugins) {
+                  loader.options.plugins = loader.options.plugins.filter(plugin => {
+                    const pluginPath = Array.isArray(plugin) ? plugin[0] : plugin;
+                    return !String(pluginPath).includes('react-refresh');
+                  });
+                }
+              });
+            }
+          });
+        };
+        removeReactRefresh(webpackConfig.module.rules);
 
         // Disable watch mode
         webpackConfig.watch = false;
@@ -73,11 +96,37 @@ const webpackConfig = {
   },
 };
 
+// Babel configuration - explicitly disable react-refresh in production
+webpackConfig.babel = {
+  plugins: [],
+  loaderOptions: (babelLoaderOptions, { env }) => {
+    if (env === 'production' || isProduction) {
+      // Filter out react-refresh from plugins
+      if (babelLoaderOptions.plugins) {
+        babelLoaderOptions.plugins = babelLoaderOptions.plugins.filter(plugin => {
+          if (!plugin) return true;
+          const pluginPath = Array.isArray(plugin) ? plugin[0] : plugin;
+          const pluginStr = typeof pluginPath === 'string' ? pluginPath : '';
+          return !pluginStr.includes('react-refresh');
+        });
+      }
+      // Also check presets for any react-refresh references
+      if (babelLoaderOptions.presets) {
+        babelLoaderOptions.presets = babelLoaderOptions.presets.map(preset => {
+          if (Array.isArray(preset) && preset[1] && preset[1].development !== undefined) {
+            preset[1].development = false;
+          }
+          return preset;
+        });
+      }
+    }
+    return babelLoaderOptions;
+  }
+};
+
 // Only add babel plugin if visual editing is enabled
 if (config.enableVisualEdits) {
-  webpackConfig.babel = {
-    plugins: [babelMetadataPlugin],
-  };
+  webpackConfig.babel.plugins.push(babelMetadataPlugin);
 }
 
 // Setup dev server with visual edits and/or health check
