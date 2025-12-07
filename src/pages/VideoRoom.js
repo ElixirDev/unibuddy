@@ -157,7 +157,6 @@ const VideoRoom = () => {
     setAudioEnabled(mediaPermissions.mic);
     startMedia(mediaPermissions.camera, mediaPermissions.mic);
     connectWebSocket();
-    toast.success('Joined room!');
   };
 
   // WebSocket connection for real-time updates
@@ -185,7 +184,6 @@ const VideoRoom = () => {
 
     ws.onopen = () => {
       console.log('Video room WebSocket connected');
-      toast.success('Connected to room');
     };
 
     ws.onmessage = (event) => {
@@ -194,14 +192,12 @@ const VideoRoom = () => {
       switch (data.type) {
         case 'participants_update':
           setParticipants(data.participants);
-          if (data.event === 'user_joined' && data.odId !== currentUser?._id) {
-            toast.success(`Someone joined the room`);
+          if (data.event === 'user_joined' && data.odId !== currentUserRef.current?._id) {
             // Initiate WebRTC call to the new participant
             if (localStreamRef.current) {
               setTimeout(() => callUser(data.odId), 500);
             }
           } else if (data.event === 'user_left') {
-            toast(`${data.userName} left the room`);
             // Close WebRTC connection with the user who left
             closeConnection(data.odId);
           }
@@ -238,7 +234,6 @@ const VideoRoom = () => {
           break;
           
         case 'screen_share_started':
-          toast.info(`${data.userName} started screen sharing`);
           // Update participant's screen sharing state
           setParticipants(prev => prev.map(p => 
             p._id === data.odId ? { ...p, mediaState: { ...p.mediaState, screenSharing: true }, screenSharerName: data.userName } : p
@@ -246,7 +241,6 @@ const VideoRoom = () => {
           break;
           
         case 'screen_share_stopped':
-          toast.info('Screen sharing stopped');
           setParticipants(prev => prev.map(p => 
             p._id === data.odId ? { ...p, mediaState: { ...p.mediaState, screenSharing: false } } : p
           ));
@@ -269,16 +263,12 @@ const VideoRoom = () => {
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
-      toast.error('Connection error');
     };
 
     ws.onclose = (event) => {
       console.log('WebSocket closed:', event.code, event.reason);
-      if (event.code !== 1000) {
-        toast.error('Disconnected from room');
-      }
     };
-  }, [code, currentUser, navigate, handleSignal, callUser, closeConnection]);
+  }, [code, navigate, handleSignal, callUser, closeConnection]);
 
   const disconnectWebSocket = () => {
     if (wsRef.current) {
