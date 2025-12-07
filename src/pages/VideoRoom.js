@@ -280,17 +280,20 @@ const VideoRoom = () => {
   }, [code, navigate, handleSignal, callUser, closeConnection]);
 
   const disconnectWebSocket = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
+    // Stop voice detection
     if (voiceDetectionRef.current) {
       cancelAnimationFrame(voiceDetectionRef.current);
       voiceDetectionRef.current = null;
     }
+    // Close audio context
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
+    }
+    // Close WebSocket
+    if (wsRef.current) {
+      wsRef.current.close(1000, 'User left');
+      wsRef.current = null;
     }
   };
 
@@ -463,11 +466,28 @@ const VideoRoom = () => {
   };
 
   const stopAllMedia = () => {
+    // Stop all local media tracks
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('Stopped track:', track.kind);
+      });
+      localStreamRef.current = null;
     }
+    // Stop screen share tracks
     if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current.getTracks().forEach(track => {
+        track.stop();
+        console.log('Stopped screen track:', track.kind);
+      });
+      screenStreamRef.current = null;
+    }
+    // Clear video elements
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    if (screenVideoRef.current) {
+      screenVideoRef.current.srcObject = null;
     }
     // Close all WebRTC connections
     closeAllConnections();
@@ -560,15 +580,17 @@ const VideoRoom = () => {
 
   const handleLeave = async () => {
     try {
+      // Stop all media first
+      stopAllMedia();
+      disconnectWebSocket();
+      
       if (room?.isHost) {
         sendWsMessage({ type: 'room_ended' });
       }
       await api.post(`/video-rooms/${code}/leave`);
-      stopAllMedia();
-      disconnectWebSocket();
-      toast.success(room?.isHost ? 'Room ended' : 'Left room');
       navigate('/rooms');
     } catch (err) {
+      // Still navigate even if API call fails
       navigate('/rooms');
     }
   };
