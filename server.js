@@ -623,19 +623,23 @@ wss.on('connection', async (ws, req) => {
 
     if (!videoRoomConnections.has(roomId)) videoRoomConnections.set(roomId, new Map());
     const roomConns = videoRoomConnections.get(roomId);
-    roomConns.set(odId, { 
-      ws, user: { _id: user._id, name: user.name, picture: user.picture },
+    const odIdStr = odId.toString();
+    
+    roomConns.set(odIdStr, { 
+      ws, user: { _id: odIdStr, name: user.name, picture: user.picture },
       mediaState: { video: false, audio: false, speaking: false, screenSharing: false }
     });
 
+    // Build participants list with string IDs
     const participantsList = [];
-    for (const [uid, conn] of roomConns) {
-      participantsList.push({ ...conn.user, mediaState: conn.mediaState });
+    for (const [odId, conn] of roomConns) {
+      participantsList.push({ _id: odId, name: conn.user.name, picture: conn.user.picture, mediaState: conn.mediaState });
     }
     
-    for (const [uid, conn] of roomConns) {
+    // Broadcast to all connected users
+    for (const [odId, conn] of roomConns) {
       if (conn.ws.readyState === WebSocket.OPEN) {
-        conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_joined', odId }));
+        conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_joined', odId: odIdStr }));
       }
     }
 
@@ -654,34 +658,34 @@ wss.on('connection', async (ws, req) => {
             }
             break;
           case 'media_state':
-            const userConn = roomConns.get(odId);
+            const userConn = roomConns.get(odIdStr);
             if (userConn) {
               userConn.mediaState = { ...userConn.mediaState, ...msg.state };
               for (const [uid, conn] of roomConns) {
                 if (conn.ws.readyState === WebSocket.OPEN) {
-                  conn.ws.send(JSON.stringify({ type: 'media_state_update', odId, state: userConn.mediaState }));
+                  conn.ws.send(JSON.stringify({ type: 'media_state_update', odId: odIdStr, state: userConn.mediaState }));
                 }
               }
             }
             break;
           case 'speaking':
             for (const [uid, conn] of roomConns) {
-              if (uid !== odId && conn.ws.readyState === WebSocket.OPEN) {
-                conn.ws.send(JSON.stringify({ type: 'speaking', odId, speaking: msg.speaking }));
+              if (uid !== odIdStr && conn.ws.readyState === WebSocket.OPEN) {
+                conn.ws.send(JSON.stringify({ type: 'speaking', odId: odIdStr, speaking: msg.speaking }));
               }
             }
             break;
           case 'screen_share_started':
             for (const [uid, conn] of roomConns) {
               if (conn.ws.readyState === WebSocket.OPEN) {
-                conn.ws.send(JSON.stringify({ type: 'screen_share_started', odId, userName: user.name }));
+                conn.ws.send(JSON.stringify({ type: 'screen_share_started', odId: odIdStr, userName: user.name }));
               }
             }
             break;
           case 'screen_share_stopped':
             for (const [uid, conn] of roomConns) {
               if (conn.ws.readyState === WebSocket.OPEN) {
-                conn.ws.send(JSON.stringify({ type: 'screen_share_stopped', odId }));
+                conn.ws.send(JSON.stringify({ type: 'screen_share_stopped', odId: odIdStr }));
               }
             }
             break;
@@ -696,12 +700,13 @@ wss.on('connection', async (ws, req) => {
           
           // WebRTC Signaling
           case 'webrtc_signal':
-            const targetConn = roomConns.get(msg.targetId);
+            const targetIdStr = msg.targetId?.toString();
+            const targetConn = roomConns.get(targetIdStr);
             if (targetConn && targetConn.ws.readyState === WebSocket.OPEN) {
               targetConn.ws.send(JSON.stringify({
                 type: 'webrtc_signal',
                 signalType: msg.signalType,
-                senderId: odId,
+                senderId: odIdStr,
                 sdp: msg.sdp,
                 candidate: msg.candidate
               }));
@@ -714,14 +719,14 @@ wss.on('connection', async (ws, req) => {
     ws.on('close', async () => {
       const roomConns = videoRoomConnections.get(roomId);
       if (roomConns) {
-        roomConns.delete(odId);
+        roomConns.delete(odIdStr);
         const participantsList = [];
-        for (const [uid, conn] of roomConns) {
-          participantsList.push({ ...conn.user, mediaState: conn.mediaState });
+        for (const [odId, conn] of roomConns) {
+          participantsList.push({ _id: odId, name: conn.user.name, picture: conn.user.picture, mediaState: conn.mediaState });
         }
         for (const [uid, conn] of roomConns) {
           if (conn.ws.readyState === WebSocket.OPEN) {
-            conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_left', odId, userName: user.name }));
+            conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_left', odId: odIdStr, userName: user.name }));
           }
         }
         if (roomConns.size === 0) videoRoomConnections.delete(roomId);
