@@ -661,6 +661,7 @@ wss.on('connection', async (ws, req) => {
             const userConn = roomConns.get(odIdStr);
             if (userConn) {
               userConn.mediaState = { ...userConn.mediaState, ...msg.state };
+              // Broadcast to ALL users so everyone sees the updated state
               for (const [uid, conn] of roomConns) {
                 if (conn.ws.readyState === WebSocket.OPEN) {
                   conn.ws.send(JSON.stringify({ type: 'media_state_update', odId: odIdStr, state: userConn.mediaState }));
@@ -669,8 +670,14 @@ wss.on('connection', async (ws, req) => {
             }
             break;
           case 'speaking':
+            // Update speaking state in connection
+            const speakingConn = roomConns.get(odIdStr);
+            if (speakingConn) {
+              speakingConn.mediaState.speaking = msg.speaking;
+            }
+            // Broadcast to ALL users (including sender for consistency)
             for (const [uid, conn] of roomConns) {
-              if (uid !== odIdStr && conn.ws.readyState === WebSocket.OPEN) {
+              if (conn.ws.readyState === WebSocket.OPEN) {
                 conn.ws.send(JSON.stringify({ type: 'speaking', odId: odIdStr, speaking: msg.speaking }));
               }
             }

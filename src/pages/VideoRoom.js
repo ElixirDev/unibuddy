@@ -232,10 +232,11 @@ const VideoRoom = () => {
         case 'speaking':
           setSpeakingUsers(prev => {
             const newSet = new Set(prev);
+            const odIdStr = String(data.odId);
             if (data.speaking) {
-              newSet.add(data.odId);
+              newSet.add(odIdStr);
             } else {
-              newSet.delete(data.odId);
+              newSet.delete(odIdStr);
             }
             return newSet;
           });
@@ -406,12 +407,13 @@ const VideoRoom = () => {
         const audioTrack = localStreamRef.current?.getAudioTracks()[0];
         const isAudioEnabled = audioTrack?.enabled ?? false;
         
-        const userId = currentUserRef.current?._id;
+        const odId = currentUserRef.current?._id;
+        const odIdStr = odId ? String(odId) : null;
         
-        if (average > voiceThreshold && isAudioEnabled && userId) {
+        if (average > voiceThreshold && isAudioEnabled && odIdStr) {
           if (!isSpeaking) {
             isSpeaking = true;
-            setSpeakingUsers(prev => new Set([...prev, userId]));
+            setSpeakingUsers(prev => new Set([...prev, odIdStr]));
             sendWsMessage({ type: 'speaking', speaking: true });
           }
           if (silenceTimeout) {
@@ -424,7 +426,7 @@ const VideoRoom = () => {
               isSpeaking = false;
               setSpeakingUsers(prev => {
                 const newSet = new Set(prev);
-                newSet.delete(userId);
+                newSet.delete(odIdStr);
                 return newSet;
               });
               sendWsMessage({ type: 'speaking', speaking: false });
@@ -511,7 +513,7 @@ const VideoRoom = () => {
         if (!audioTrack.enabled) {
           setSpeakingUsers(prev => {
             const newSet = new Set(prev);
-            newSet.delete(currentUser?._id);
+            newSet.delete(String(currentUser?._id));
             return newSet;
           });
         }
@@ -832,7 +834,7 @@ const VideoRoom = () => {
             {/* Participants Grid */}
             <div className={`grid ${getGridClass(participants.length)} gap-2 sm:gap-3 flex-1`}>
               {/* Your Video */}
-              <div className={`relative bg-zinc-900 rounded-xl sm:rounded-2xl overflow-hidden min-h-[120px] sm:min-h-[180px] transition-all duration-300 ${speakingUsers.has(currentUser?._id) ? 'ring-4 ring-emerald-500 ring-opacity-75' : 'border border-zinc-800'}`}>
+              <div className={`relative bg-zinc-900 rounded-xl sm:rounded-2xl overflow-hidden min-h-[120px] sm:min-h-[180px] transition-all duration-300 ${speakingUsers.has(String(currentUser?._id)) ? 'ring-4 ring-emerald-500 ring-opacity-75' : 'border border-zinc-800'}`}>
                 <video
                   ref={localVideoRef}
                   autoPlay
@@ -861,7 +863,7 @@ const VideoRoom = () => {
                     Sharing
                   </div>
                 )}
-                {speakingUsers.has(currentUser?._id) && (
+                {speakingUsers.has(String(currentUser?._id)) && (
                   <div className="absolute top-2 right-2 bg-emerald-500 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1">
                     <Volume2 className="w-3 h-3" />
                   </div>
@@ -879,7 +881,7 @@ const VideoRoom = () => {
 
               {/* Other Participants */}
               {otherParticipants.map((participant) => (
-                <div key={participant._id} className={`relative bg-zinc-900 rounded-xl sm:rounded-2xl overflow-hidden min-h-[120px] sm:min-h-[180px] transition-all duration-300 ${speakingUsers.has(participant._id) ? 'ring-4 ring-emerald-500 ring-opacity-75' : 'border border-zinc-800'}`}>
+                <div key={participant._id} className={`relative bg-zinc-900 rounded-xl sm:rounded-2xl overflow-hidden min-h-[120px] sm:min-h-[180px] transition-all duration-300 ${speakingUsers.has(String(participant._id)) ? 'ring-4 ring-emerald-500 ring-opacity-75' : 'border border-zinc-800'}`}>
                   {/* Remote Video Stream */}
                   <video
                     ref={el => {
@@ -930,7 +932,7 @@ const VideoRoom = () => {
                         </div>
                       )}
                     </div>
-                    {speakingUsers.has(participant._id) && (
+                    {speakingUsers.has(String(participant._id)) && (
                       <div className="bg-emerald-500 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1">
                         <Volume2 className="w-3 h-3" />
                       </div>
@@ -965,13 +967,13 @@ const VideoRoom = () => {
                 <div key={p._id} className={`flex items-center gap-2 sm:gap-3 p-2 sm:p-3 rounded-xl transition-colors ${p._id === currentUser?._id ? 'bg-purple-600/20 border border-purple-500/30' : 'hover:bg-zinc-800'}`}>
                   <div className="relative">
                     {p.picture ? (
-                      <img src={p.picture} alt="" className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 ${speakingUsers.has(p._id) ? 'border-emerald-500' : p.mediaState?.video === false ? 'border-red-500/50 opacity-70' : 'border-zinc-700'}`} />
+                      <img src={p.picture} alt="" className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 ${speakingUsers.has(String(p._id)) ? 'border-emerald-500' : p.mediaState?.video === false ? 'border-red-500/50 opacity-70' : 'border-zinc-700'}`} />
                     ) : (
-                      <div className={`w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-600 to-emerald-500 rounded-full flex items-center justify-center text-white font-bold text-base sm:text-lg border-2 ${speakingUsers.has(p._id) ? 'border-emerald-500' : 'border-transparent'} ${p.mediaState?.video === false ? 'opacity-70' : ''}`}>
+                      <div className={`w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-purple-600 to-emerald-500 rounded-full flex items-center justify-center text-white font-bold text-base sm:text-lg border-2 ${speakingUsers.has(String(p._id)) ? 'border-emerald-500' : 'border-transparent'} ${p.mediaState?.video === false ? 'opacity-70' : ''}`}>
                         {p.name?.charAt(0)}
                       </div>
                     )}
-                    {speakingUsers.has(p._id) && (
+                    {speakingUsers.has(String(p._id)) && (
                       <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center">
                         <Volume2 className="w-2.5 h-2.5 text-white" />
                       </div>
@@ -1005,7 +1007,7 @@ const VideoRoom = () => {
                   <div className="flex items-center gap-1">
                     {p.mediaState?.audio === false && <div className="w-6 h-6 bg-red-500/20 rounded-full flex items-center justify-center"><MicOff className="w-3 h-3 text-red-400" /></div>}
                     {p.mediaState?.video === false && <div className="w-6 h-6 bg-red-500/20 rounded-full flex items-center justify-center"><VideoOff className="w-3 h-3 text-red-400" /></div>}
-                    <div className={`w-2 h-2 rounded-full ${speakingUsers.has(p._id) ? 'bg-emerald-500 animate-pulse' : 'bg-emerald-500'}`}></div>
+                    <div className={`w-2 h-2 rounded-full ${speakingUsers.has(String(p._id)) ? 'bg-emerald-500 animate-pulse' : 'bg-emerald-500'}`}></div>
                   </div>
                 </div>
               ))}
