@@ -68,7 +68,9 @@ const VideoRoom = () => {
     callUser, 
     closeConnection, 
     closeAllConnections,
-    connectToParticipants 
+    connectToParticipants,
+    addScreenShareTrack,
+    removeScreenShareTrack
   } = useWebRTC(wsRef, currentUserRef.current?._id || currentUser?._id);
 
   // Scroll to bottom of chat
@@ -543,7 +545,9 @@ const VideoRoom = () => {
 
   const toggleScreenShare = async () => {
     if (screenSharing) {
+      // Stop screen sharing
       if (screenStreamRef.current) {
+        removeScreenShareTrack(screenStreamRef.current);
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
@@ -555,12 +559,19 @@ const VideoRoom = () => {
       try {
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = screenStream;
-        // Set screen share to the screen video ref
+        
+        // Set screen share to the screen video ref (local preview)
         if (screenVideoRef.current) {
           screenVideoRef.current.srcObject = screenStream;
         }
+        
+        // Add screen share track to WebRTC peer connections
+        addScreenShareTrack(screenStream);
+        
+        // Handle when user stops sharing via browser UI
         screenStream.getVideoTracks()[0].onended = () => {
           if (screenStreamRef.current) {
+            removeScreenShareTrack(screenStreamRef.current);
             screenStreamRef.current = null;
           }
           setScreenSharing(false);
@@ -568,6 +579,7 @@ const VideoRoom = () => {
           sendWsMessage({ type: 'screen_share_stopped' });
           sendWsMessage({ type: 'media_state', state: { screenSharing: false } });
         };
+        
         setScreenSharing(true);
         saveMediaState(videoEnabled, audioEnabled, true);
         sendWsMessage({ type: 'screen_share_started' });

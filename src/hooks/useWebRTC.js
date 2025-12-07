@@ -69,20 +69,26 @@ export const useWebRTC = (wsRef, currentUserId) => {
       }
     };
 
-    // Handle incoming tracks (remote video/audio)
+    // Handle incoming tracks (remote video/audio/screen)
     pc.ontrack = (event) => {
-      console.log('Received remote track from:', remoteUserId, event.track.kind);
+      console.log('Received remote track from:', remoteUserId, event.track.kind, 'streams:', event.streams.length);
+      
+      // Use the stream from the event if available
+      const incomingStream = event.streams[0];
+      
       let stream = remoteStreams.current.get(remoteUserId);
       if (!stream) {
         stream = new MediaStream();
         remoteStreams.current.set(remoteUserId, stream);
       }
-      // Avoid duplicate tracks
-      const existingTrack = stream.getTracks().find(t => t.kind === event.track.kind);
-      if (existingTrack) {
-        stream.removeTrack(existingTrack);
+      
+      // For video tracks, we might have multiple (camera + screen share)
+      // Add the track without removing existing ones of the same kind
+      if (!stream.getTracks().find(t => t.id === event.track.id)) {
+        stream.addTrack(event.track);
+        console.log('Added track to stream:', event.track.kind, event.track.id);
       }
-      stream.addTrack(event.track);
+      
       setRemoteStreamMap(new Map(remoteStreams.current));
     };
 
@@ -224,6 +230,44 @@ export const useWebRTC = (wsRef, currentUserId) => {
     }
   }, [createPeerConnection, sendSignal, isPolite]);
 
+  // Add screen share track to all peer connections
+  const addScreenShareTrack = useCallback((screenStream) => {
+    if (!screenStream) return;
+    
+    const videoTrack = screenStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    peerConnections.current.forEach((pc, odId) => {
+      try {
+        // Add the screen share track
+        pc.addTrack(videoTrack, screenStream);
+        console.log('Added screen share track to peer:', odId);
+      } catch (err) {
+        console.error('Error adding screen share track:', err);
+      }
+    });
+  }, []);
+
+  // Remove screen share track from all peer connections
+  const removeScreenShareTrack = useCallback((screenStream) => {
+    if (!screenStream) return;
+    
+    const videoTrack = screenStream.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    peerConnections.current.forEach((pc, odId) => {
+      try {
+        const sender = pc.getSenders().find(s => s.track === videoTrack);
+        if (sender) {
+          pc.removeTrack(sender);
+          console.log('Removed screen share track from peer:', odId);
+        }
+      } catch (err) {
+        console.error('Error removing screen share track:', err);
+      }
+    });
+  }, []);
+
   // Close connection with a specific user
   const closeConnection = useCallback((remoteUserId) => {
     const pc = peerConnections.current.get(remoteUserId);
@@ -265,7 +309,9 @@ export const useWebRTC = (wsRef, currentUserId) => {
     callUser,
     closeConnection,
     closeAllConnections,
-    connectToParticipants
+    connectToParticipants,
+    addScreenShareTrack,
+    removeScreenShareTrack
   };
 };
 
