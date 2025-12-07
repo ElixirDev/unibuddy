@@ -846,21 +846,40 @@ const VideoRoom = () => {
                     </div>
                   </>
                 ) : (
-                  <>
-                    <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-900">
-                      <div className="text-center">
-                        <Monitor className="w-16 h-16 text-emerald-500 mx-auto mb-4" />
-                        <p className="text-white font-medium text-lg">
-                          {otherParticipants.find(p => p.mediaState?.screenSharing)?.name} is sharing their screen
-                        </p>
-                        <p className="text-zinc-400 text-sm mt-2">WebRTC connection required for live view</p>
-                      </div>
-                    </div>
-                    <div className="absolute top-3 left-3 bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                      <Monitor className="w-3.5 h-3.5" />
-                      Screen Share
-                    </div>
-                  </>
+                  (() => {
+                    const sharingParticipant = otherParticipants.find(p => p.mediaState?.screenSharing);
+                    const sharingStream = sharingParticipant ? remoteStreamMap.get(String(sharingParticipant._id)) : null;
+                    return (
+                      <>
+                        {sharingStream ? (
+                          <video
+                            autoPlay
+                            playsInline
+                            ref={el => {
+                              if (el && sharingStream) {
+                                el.srcObject = sharingStream;
+                              }
+                            }}
+                            className="w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-900">
+                            <div className="text-center">
+                              <Monitor className="w-16 h-16 text-emerald-500 mx-auto mb-4" />
+                              <p className="text-white font-medium text-lg">
+                                {sharingParticipant?.name} is sharing their screen
+                              </p>
+                              <p className="text-zinc-400 text-sm mt-2">Connecting...</p>
+                            </div>
+                          </div>
+                        )}
+                        <div className="absolute top-3 left-3 bg-emerald-500 text-white text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                          <Monitor className="w-3.5 h-3.5" />
+                          {sharingParticipant?.name}'s Screen
+                        </div>
+                      </>
+                    );
+                  })()
                 )}
               </div>
             )}
