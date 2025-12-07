@@ -60,7 +60,7 @@ const VideoRoom = () => {
   const messagesEndRef = useRef(null);
   const showChatRef = useRef(false); // Ref for chat visibility in WebSocket handler
   
-  // WebRTC hook
+  // WebRTC hook - use ref to ensure we always have the latest user ID
   const { 
     remoteStreamMap, 
     setLocalStream, 
@@ -69,7 +69,7 @@ const VideoRoom = () => {
     closeConnection, 
     closeAllConnections,
     connectToParticipants 
-  } = useWebRTC(wsRef, currentUser?._id);
+  } = useWebRTC(wsRef, currentUserRef.current?._id || currentUser?._id);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -83,8 +83,11 @@ const VideoRoom = () => {
   }, [showChat]);
 
   useEffect(() => {
-    getCurrentUser();
-    checkRoom();
+    const init = async () => {
+      await getCurrentUser();
+      await checkRoom();
+    };
+    init();
     return () => {
       stopAllMedia();
       disconnectWebSocket();
@@ -96,8 +99,13 @@ const VideoRoom = () => {
     try {
       const res = await api.get('/auth/me');
       setCurrentUser(res.data.user);
-      currentUserRef.current = res.data.user; // Update ref for voice detection
-    } catch (err) {}
+      currentUserRef.current = res.data.user;
+      return res.data.user;
+    } catch (err) {
+      console.error('Failed to get current user:', err);
+      navigate('/login');
+      return null;
+    }
   };
 
   const checkRoom = async () => {
