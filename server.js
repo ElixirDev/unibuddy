@@ -693,6 +693,20 @@ wss.on('connection', async (ws, req) => {
             }
             videoRoomConnections.delete(roomId);
             break;
+          
+          // WebRTC Signaling
+          case 'webrtc_signal':
+            const targetConn = roomConns.get(msg.targetId);
+            if (targetConn && targetConn.ws.readyState === WebSocket.OPEN) {
+              targetConn.ws.send(JSON.stringify({
+                type: 'webrtc_signal',
+                signalType: msg.signalType,
+                senderId: odId,
+                sdp: msg.sdp,
+                candidate: msg.candidate
+              }));
+            }
+            break;
         }
       } catch (error) { console.error('Video room WebSocket error:', error); }
     });

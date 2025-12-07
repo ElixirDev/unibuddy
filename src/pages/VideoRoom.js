@@ -7,6 +7,7 @@ import {
 import { toast } from 'sonner';
 import { QRCodeSVG } from 'qrcode.react';
 import api from '../utils/api';
+import useWebRTC from '../hooks/useWebRTC';
 
 const VideoRoom = () => {
   const { code } = useParams();
@@ -48,6 +49,7 @@ const VideoRoom = () => {
   // Refs
   const localVideoRef = useRef(null);
   const screenVideoRef = useRef(null); // Separate ref for screen share display
+  const remoteVideoRefs = useRef(new Map()); // odId -> video element ref
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
   const wsRef = useRef(null);
@@ -57,6 +59,17 @@ const VideoRoom = () => {
   const voiceDetectionRef = useRef(null);
   const messagesEndRef = useRef(null);
   const showChatRef = useRef(false); // Ref for chat visibility in WebSocket handler
+  
+  // WebRTC hook
+  const { 
+    remoteStreamMap, 
+    setLocalStream, 
+    handleSignal, 
+    callUser, 
+    closeConnection, 
+    closeAllConnections,
+    connectToParticipants 
+  } = useWebRTC(wsRef, currentUser?._id);
 
   // Scroll to bottom of chat
   useEffect(() => {
@@ -181,10 +194,16 @@ const VideoRoom = () => {
       switch (data.type) {
         case 'participants_update':
           setParticipants(data.participants);
-          if (data.event === 'user_joined' && data.userId !== currentUser?._id) {
+          if (data.event === 'user_joined' && data.odId !== currentUser?._id) {
             toast.success(`Someone joined the room`);
+            // Initiate WebRTC call to the new participant
+            if (localStreamRef.current) {
+              setTimeout(() => callUser(data.odId), 500);
+            }
           } else if (data.event === 'user_left') {
             toast(`${data.userName} left the room`);
+            // Close WebRTC connection with the user who left
+            closeConnection(data.odId);
           }
           break;
           
@@ -238,6 +257,10 @@ const VideoRoom = () => {
           stopAllMedia();
           navigate('/rooms');
           break;
+        
+        case 'webrtc_signal':
+          handleSignal(data);
+          break;
           
         default:
           break;
@@ -255,7 +278,7 @@ const VideoRoom = () => {
         toast.error('Disconnected from room');
       }
     };
-  }, [code, currentUser, navigate]);
+  }, [code, currentUser, navigate, handleSignal, callUser, closeConnection]);
 
   const disconnectWebSocket = () => {
     if (wsRef.current) {
@@ -314,6 +337,8 @@ const VideoRoom = () => {
         }
       });
       localStreamRef.current = stream;
+      setLocalStream(stream); // Set stream for WebRTC
+      
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
       }
@@ -334,9 +359,16 @@ const VideoRoom = () => {
       // Setup voice activity detection (always setup, but only sends when unmuted)
       setupVoiceDetection(stream);
       
-      // Send initial media state
+      // Send initial media state and connect to existing participants
       setTimeout(() => {
         sendWsMessage({ type: 'media_state', state: { video: enableCamera, audio: enableMic } });
+        // Connect to all existing participants via WebRTC
+        const otherParticipantIds = participants
+          .filter(p => p._id !== currentUser?._id)
+          .map(p => p._id);
+        if (otherParticipantIds.length > 0) {
+          connectToParticipants(otherParticipantIds);
+        }
       }, 1000);
     } catch (err) {
       console.error('Media error:', err);
@@ -437,6 +469,8 @@ const VideoRoom = () => {
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach(track => track.stop());
     }
+    // Close all WebRTC connections
+    closeAllConnections();
   };
 
   // Save media state to MongoDB
@@ -848,6 +882,23 @@ const VideoRoom = () => {
               {/* Other Participants */}
               {otherParticipants.map((participant) => (
                 <div key={participant._id} className={`relative bg-zinc-900 rounded-xl sm:rounded-2xl overflow-hidden min-h-[120px] sm:min-h-[180px] transition-all duration-300 ${speakingUsers.has(participant._id) ? 'ring-4 ring-emerald-500 ring-opacity-75' : 'border border-zinc-800'}`}>
+                  {/* Remote Video Stream */}
+                  <video
+                    ref={el => {
+                      if (el) {
+                        remoteVideoRefs.current.set(participant._id, el);
+                        const stream = remoteStreamMap.get(participant._id);
+                        if (stream && el.srcObject !== stream) {
+                          el.srcObject = stream;
+                        }
+                      }
+                    }}
+                    autoPlay
+                    playsInline
+                    className={`w-full h-full object-cover absolute inset-0 ${!participant.mediaState?.video || !remoteStreamMap.has(participant._id) ? 'hidden' : ''}`}
+                  />
+                  {/* Fallback avatar when no video */}
+                  {(!participant.mediaState?.video || !remoteStreamMap.has(participant._id)) && (
                   <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-900">
                     <div className="text-center">
                       {participant.picture ? (
@@ -866,6 +917,7 @@ const VideoRoom = () => {
                       )}
                     </div>
                   </div>
+                  )}
                   {/* Top indicators */}
                   <div className="absolute top-2 left-2 right-2 flex justify-between">
                     <div className="flex gap-1">
