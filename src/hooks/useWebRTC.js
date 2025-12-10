@@ -320,36 +320,45 @@ export const useWebRTC = (wsRef, currentUserId) => {
     }
   }, [createPeerConnection, sendSignal, isPolite]);
 
-  // Add screen share track to all peer connections
+  // Add screen share track by replacing the video track (avoids renegotiation issues)
   const addScreenShareTrack = useCallback((screenStream) => {
     if (!screenStream) return;
     
-    const videoTrack = screenStream.getVideoTracks()[0];
-    if (!videoTrack) return;
+    const screenTrack = screenStream.getVideoTracks()[0];
+    if (!screenTrack) return;
 
-    peerConnections.current.forEach((pc, odId) => {
+    peerConnections.current.forEach(async (pc, odId) => {
       try {
-        pc.addTrack(videoTrack, screenStream);
-        console.log('Added screen share track to peer:', odId);
+        // Find the video sender and replace its track with screen share
+        const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (videoSender) {
+          await videoSender.replaceTrack(screenTrack);
+          console.log('Replaced video track with screen share for peer:', odId);
+        } else {
+          // No existing video sender, add the track
+          pc.addTrack(screenTrack, screenStream);
+          console.log('Added screen share track to peer:', odId);
+        }
       } catch (err) {
         console.error('Error adding screen share track:', err);
       }
     });
   }, []);
 
-  // Remove screen share track from all peer connections
-  const removeScreenShareTrack = useCallback((screenStream) => {
+  // Remove screen share track by replacing back with camera
+  const removeScreenShareTrack = useCallback((screenStream, cameraStream) => {
     if (!screenStream) return;
-    
-    const videoTrack = screenStream.getVideoTracks()[0];
-    if (!videoTrack) return;
 
-    peerConnections.current.forEach((pc, odId) => {
+    peerConnections.current.forEach(async (pc, odId) => {
       try {
-        const sender = pc.getSenders().find(s => s.track === videoTrack);
-        if (sender) {
-          pc.removeTrack(sender);
-          console.log('Removed screen share track from peer:', odId);
+        const videoSender = pc.getSenders().find(s => s.track?.kind === 'video');
+        if (videoSender && cameraStream) {
+          // Replace screen share with camera track
+          const cameraTrack = cameraStream.getVideoTracks()[0];
+          if (cameraTrack) {
+            await videoSender.replaceTrack(cameraTrack);
+            console.log('Replaced screen share with camera for peer:', odId);
+          }
         }
       } catch (err) {
         console.error('Error removing screen share track:', err);
