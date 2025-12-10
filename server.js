@@ -175,7 +175,7 @@ app.post('/api/video-rooms', authenticateToken, async (req, res) => {
 
     const videoRoom = new VideoRoom({
       name, code, password: hashedPassword, host: req.userId,
-      participants: [req.userId], maxParticipants: maxParticipants || 10, settings: settings || {}
+      participants: [req.userId], maxParticipants: maxParticipants || 0, settings: settings || {} // 0 = unlimited
     });
     await videoRoom.save();
 
@@ -214,7 +214,8 @@ app.post('/api/video-rooms/join', authenticateToken, async (req, res) => {
       if (!validPassword) return res.status(401).json({ detail: 'Invalid password' });
     }
 
-    if (room.participants.length >= room.maxParticipants) {
+    // Only check limit if maxParticipants > 0 (0 = unlimited)
+    if (room.maxParticipants > 0 && room.participants.length >= room.maxParticipants) {
       return res.status(400).json({ detail: 'Room is full' });
     }
 
@@ -639,7 +640,7 @@ wss.on('connection', async (ws, req) => {
     // Broadcast to all connected users
     for (const [odId, conn] of roomConns) {
       if (conn.ws.readyState === WebSocket.OPEN) {
-        conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_joined', odId: odIdStr }));
+        conn.ws.send(JSON.stringify({ type: 'participants_update', participants: participantsList, event: 'user_joined', odId: odIdStr, userName: user.name }));
       }
     }
 
@@ -679,6 +680,19 @@ wss.on('connection', async (ws, req) => {
             for (const [uid, conn] of roomConns) {
               if (conn.ws.readyState === WebSocket.OPEN) {
                 conn.ws.send(JSON.stringify({ type: 'speaking', odId: odIdStr, speaking: msg.speaking }));
+              }
+            }
+            break;
+          case 'hand_raised':
+            // Broadcast hand raise to all users
+            for (const [uid, conn] of roomConns) {
+              if (conn.ws.readyState === WebSocket.OPEN) {
+                conn.ws.send(JSON.stringify({ 
+                  type: 'hand_raised', 
+                  odId: odIdStr, 
+                  userName: user.name,
+                  raised: msg.raised 
+                }));
               }
             }
             break;

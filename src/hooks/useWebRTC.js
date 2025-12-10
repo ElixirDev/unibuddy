@@ -1,6 +1,6 @@
-import { useRef, useCallback, useState } from 'react';
+import { useRef, useCallback, useState, useEffect } from 'react';
 
-// Free STUN servers for NAT traversal
+// Enhanced ICE servers for better connectivity with many participants
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -8,7 +8,16 @@ const ICE_SERVERS = {
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
-  ]
+    { urls: 'stun:stun.stunprotocol.org:3478' },
+  ],
+  iceCandidatePoolSize: 10, // Pre-gather candidates for faster connections
+};
+
+// Bandwidth constraints for scalability
+const VIDEO_CONSTRAINTS = {
+  width: { ideal: 640, max: 1280 },
+  height: { ideal: 480, max: 720 },
+  frameRate: { ideal: 24, max: 30 }
 };
 
 export const useWebRTC = (wsRef, currentUserId) => {
@@ -17,11 +26,30 @@ export const useWebRTC = (wsRef, currentUserId) => {
   const [remoteStreamMap, setRemoteStreamMap] = useState(new Map());
   const localStreamRef = useRef(null);
   const pendingCandidates = useRef(new Map());
-  const makingOffer = useRef(new Map()); // Track if we're making an offer
-  const ignoreOffer = useRef(new Map()); // Track if we should ignore incoming offer
+  const makingOffer = useRef(new Map());
+  const ignoreOffer = useRef(new Map());
+  const connectionRetries = useRef(new Map()); // Track retry attempts
+  const maxRetries = 3;
+
+  // Cleanup on unmount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    return () => {
+      // Cleanup on unmount - close all connections
+      peerConnections.current.forEach(pc => pc.close());
+      peerConnections.current.clear();
+      remoteStreams.current.clear();
+    };
+  }, []);
 
   const setLocalStream = useCallback((stream) => {
     localStreamRef.current = stream;
+    
+    // Apply bandwidth constraints to video track
+    const videoTrack = stream?.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.applyConstraints(VIDEO_CONSTRAINTS).catch(console.warn);
+    }
   }, []);
 
   const sendSignal = useCallback((type, targetId, payload) => {
@@ -37,7 +65,13 @@ export const useWebRTC = (wsRef, currentUserId) => {
 
   const createPeerConnection = useCallback((remoteUserId) => {
     if (peerConnections.current.has(remoteUserId)) {
-      return peerConnections.current.get(remoteUserId);
+      const existingPc = peerConnections.current.get(remoteUserId);
+      if (existingPc.connectionState !== 'failed' && existingPc.connectionState !== 'closed') {
+        return existingPc;
+      }
+      // Clean up failed connection
+      existingPc.close();
+      peerConnections.current.delete(remoteUserId);
     }
 
     console.log('Creating peer connection for:', remoteUserId);
@@ -50,31 +84,74 @@ export const useWebRTC = (wsRef, currentUserId) => {
       });
     }
 
-    // Handle ICE candidates
+    // Handle ICE candidates with batching for efficiency
+    let candidateBuffer = [];
+    let candidateTimeout = null;
+    
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        sendSignal('ice-candidate', remoteUserId, { candidate: event.candidate });
+        candidateBuffer.push(event.candidate);
+        
+        // Batch send candidates every 100ms
+        if (!candidateTimeout) {
+          candidateTimeout = setTimeout(() => {
+            candidateBuffer.forEach(candidate => {
+              sendSignal('ice-candidate', remoteUserId, { candidate });
+            });
+            candidateBuffer = [];
+            candidateTimeout = null;
+          }, 100);
+        }
       }
     };
 
-    // Handle connection state changes
+    // Handle ICE connection state for reconnection
+    pc.oniceconnectionstatechange = () => {
+      console.log(`ICE state with ${remoteUserId}:`, pc.iceConnectionState);
+      
+      if (pc.iceConnectionState === 'disconnected') {
+        // Try ICE restart
+        setTimeout(() => {
+          if (pc.iceConnectionState === 'disconnected') {
+            console.log('Attempting ICE restart for:', remoteUserId);
+            pc.restartIce();
+          }
+        }, 2000);
+      }
+    };
+
+    // Handle connection state changes with retry logic
     pc.onconnectionstatechange = () => {
       console.log(`Connection state with ${remoteUserId}:`, pc.connectionState);
+      
       if (pc.connectionState === 'failed') {
-        // Close and remove failed connection
-        pc.close();
-        peerConnections.current.delete(remoteUserId);
-        remoteStreams.current.delete(remoteUserId);
-        setRemoteStreamMap(new Map(remoteStreams.current));
+        const retries = connectionRetries.current.get(remoteUserId) || 0;
+        
+        if (retries < maxRetries) {
+          connectionRetries.current.set(remoteUserId, retries + 1);
+          console.log(`Retrying connection to ${remoteUserId} (attempt ${retries + 1})`);
+          
+          // Close and recreate connection
+          pc.close();
+          peerConnections.current.delete(remoteUserId);
+          remoteStreams.current.delete(remoteUserId);
+          setRemoteStreamMap(new Map(remoteStreams.current));
+          // Note: Retry will be handled by the participant reconnecting
+        } else {
+          console.error(`Max retries reached for ${remoteUserId}`);
+          pc.close();
+          peerConnections.current.delete(remoteUserId);
+          remoteStreams.current.delete(remoteUserId);
+          setRemoteStreamMap(new Map(remoteStreams.current));
+        }
+      } else if (pc.connectionState === 'connected') {
+        connectionRetries.current.delete(remoteUserId);
       }
     };
 
     // Handle incoming tracks (remote video/audio/screen)
     pc.ontrack = (event) => {
-      console.log('Received remote track from:', remoteUserId, event.track.kind, 'streams:', event.streams.length);
-      
-      // Use the stream from the event if available
-      const incomingStream = event.streams[0];
+      console.log('Received remote track from:', remoteUserId, event.track.kind);
       
       let stream = remoteStreams.current.get(remoteUserId);
       if (!stream) {
@@ -82,30 +159,50 @@ export const useWebRTC = (wsRef, currentUserId) => {
         remoteStreams.current.set(remoteUserId, stream);
       }
       
-      // For video tracks, we might have multiple (camera + screen share)
-      // Add the track without removing existing ones of the same kind
+      // Add track if not already present
       if (!stream.getTracks().find(t => t.id === event.track.id)) {
         stream.addTrack(event.track);
         console.log('Added track to stream:', event.track.kind, event.track.id);
       }
       
+      // Handle track ended
+      event.track.onended = () => {
+        console.log('Track ended:', event.track.kind, 'from:', remoteUserId);
+        stream.removeTrack(event.track);
+        setRemoteStreamMap(new Map(remoteStreams.current));
+      };
+      
       setRemoteStreamMap(new Map(remoteStreams.current));
+    };
+
+    // Handle negotiation needed (for adding/removing tracks)
+    pc.onnegotiationneeded = async () => {
+      if (pc.signalingState !== 'stable') return;
+      
+      try {
+        makingOffer.current.set(remoteUserId, true);
+        const offer = await pc.createOffer();
+        if (pc.signalingState !== 'stable') return;
+        await pc.setLocalDescription(offer);
+        sendSignal('offer', remoteUserId, { sdp: pc.localDescription });
+      } catch (err) {
+        console.error('Negotiation error:', err);
+      } finally {
+        makingOffer.current.set(remoteUserId, false);
+      }
     };
 
     peerConnections.current.set(remoteUserId, pc);
     return pc;
   }, [sendSignal]);
 
-  // Polite peer: determine who should be "polite" based on ID comparison
+  // Polite peer pattern
   const isPolite = useCallback((remoteUserId) => {
-    // The user with the "smaller" ID is polite and will yield in conflicts
     return currentUserId < remoteUserId;
   }, [currentUserId]);
 
-  // Initiate call to a remote user (caller side)
+  // Initiate call to a remote user
   const callUser = useCallback(async (remoteUserId) => {
-    // Only the "impolite" peer (larger ID) initiates the call
-    // This prevents both peers from sending offers simultaneously
     if (isPolite(remoteUserId)) {
       console.log('Waiting for offer from:', remoteUserId, '(we are polite)');
       return;
@@ -113,7 +210,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
 
     const pc = createPeerConnection(remoteUserId);
     
-    // Check if already connected or connecting
     if (pc.signalingState !== 'stable' && pc.signalingState !== 'closed') {
       console.log('Already negotiating with:', remoteUserId);
       return;
@@ -126,7 +222,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
         offerToReceiveVideo: true
       });
       
-      // Check if state changed during async operation
       if (pc.signalingState !== 'stable') {
         console.log('State changed during offer creation, aborting');
         return;
@@ -142,7 +237,7 @@ export const useWebRTC = (wsRef, currentUserId) => {
     }
   }, [createPeerConnection, sendSignal, isPolite]);
 
-  // Handle incoming WebRTC signals with polite peer pattern
+  // Handle incoming WebRTC signals
   const handleSignal = useCallback(async (data) => {
     const { signalType, senderId, sdp, candidate } = data;
     console.log('Received signal:', signalType, 'from:', senderId);
@@ -151,7 +246,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
     const polite = isPolite(senderId);
 
     if (signalType === 'offer') {
-      // Handle offer collision (glare)
       const offerCollision = makingOffer.current.get(senderId) || 
         (pc.signalingState !== 'stable' && pc.signalingState !== 'closed');
       
@@ -163,7 +257,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
       }
 
       try {
-        // If we're in the middle of something, rollback
         if (pc.signalingState !== 'stable') {
           await Promise.all([
             pc.setLocalDescription({ type: 'rollback' }),
@@ -173,7 +266,7 @@ export const useWebRTC = (wsRef, currentUserId) => {
           await pc.setRemoteDescription(new RTCSessionDescription(sdp));
         }
         
-        // Process any pending ICE candidates
+        // Process pending ICE candidates
         const pending = pendingCandidates.current.get(senderId) || [];
         for (const c of pending) {
           try {
@@ -193,11 +286,9 @@ export const useWebRTC = (wsRef, currentUserId) => {
       }
     } else if (signalType === 'answer') {
       try {
-        // Only set remote description if we're expecting an answer
         if (pc.signalingState === 'have-local-offer') {
           await pc.setRemoteDescription(new RTCSessionDescription(sdp));
           
-          // Process any pending ICE candidates
           const pending = pendingCandidates.current.get(senderId) || [];
           for (const c of pending) {
             try {
@@ -218,7 +309,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
         if (pc.remoteDescription && pc.remoteDescription.type) {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         } else {
-          // Queue the candidate until we have the remote description
           if (!pendingCandidates.current.has(senderId)) {
             pendingCandidates.current.set(senderId, []);
           }
@@ -239,7 +329,6 @@ export const useWebRTC = (wsRef, currentUserId) => {
 
     peerConnections.current.forEach((pc, odId) => {
       try {
-        // Add the screen share track
         pc.addTrack(videoTrack, screenStream);
         console.log('Added screen share track to peer:', odId);
       } catch (err) {
@@ -279,6 +368,7 @@ export const useWebRTC = (wsRef, currentUserId) => {
     makingOffer.current.delete(remoteUserId);
     ignoreOffer.current.delete(remoteUserId);
     pendingCandidates.current.delete(remoteUserId);
+    connectionRetries.current.delete(remoteUserId);
     setRemoteStreamMap(new Map(remoteStreams.current));
   }, []);
 
@@ -290,17 +380,45 @@ export const useWebRTC = (wsRef, currentUserId) => {
     pendingCandidates.current.clear();
     makingOffer.current.clear();
     ignoreOffer.current.clear();
+    connectionRetries.current.clear();
     setRemoteStreamMap(new Map());
   }, []);
 
-  // Connect to all existing participants
+  // Connect to all existing participants with staggered connections
   const connectToParticipants = useCallback((participantIds) => {
-    participantIds.forEach(id => {
+    participantIds.forEach((id, index) => {
       if (id !== currentUserId && !peerConnections.current.has(id)) {
-        callUser(id);
+        // Stagger connections to avoid overwhelming the network
+        setTimeout(() => {
+          callUser(id);
+        }, index * 200); // 200ms delay between each connection
       }
     });
   }, [currentUserId, callUser]);
+
+  // Get connection stats for a peer
+  const getConnectionStats = useCallback(async (remoteUserId) => {
+    const pc = peerConnections.current.get(remoteUserId);
+    if (!pc) return null;
+    
+    try {
+      const stats = await pc.getStats();
+      let result = { bytesReceived: 0, bytesSent: 0, packetsLost: 0 };
+      
+      stats.forEach(report => {
+        if (report.type === 'inbound-rtp') {
+          result.bytesReceived += report.bytesReceived || 0;
+          result.packetsLost += report.packetsLost || 0;
+        } else if (report.type === 'outbound-rtp') {
+          result.bytesSent += report.bytesSent || 0;
+        }
+      });
+      
+      return result;
+    } catch (err) {
+      return null;
+    }
+  }, []);
 
   return {
     remoteStreamMap,
@@ -311,7 +429,8 @@ export const useWebRTC = (wsRef, currentUserId) => {
     closeAllConnections,
     connectToParticipants,
     addScreenShareTrack,
-    removeScreenShareTrack
+    removeScreenShareTrack,
+    getConnectionStats
   };
 };
 
