@@ -143,19 +143,38 @@ const VideoRoom = () => {
     checkScreenShare();
   }, []);
 
+  // Get the video element for the active speaker (for PiP)
+  const getActiveSpeakerVideo = useCallback(() => {
+    // Find who is currently speaking
+    const speakingArray = Array.from(speakingUsers);
+    if (speakingArray.length > 0) {
+      const speakerId = speakingArray[speakingArray.length - 1];
+      // If it's not us, try to get their video
+      if (speakerId !== String(currentUser?._id)) {
+        const remoteVideo = remoteVideoRefs.current.get(speakerId);
+        if (remoteVideo && remoteVideo.readyState >= 2) {
+          return remoteVideo;
+        }
+      }
+    }
+    // Default to local video
+    return localVideoRef.current;
+  }, [speakingUsers, currentUser]);
+
   // Picture-in-Picture handling - float call when switching tabs
   useEffect(() => {
-    if (!joined || !localVideoRef.current) return;
+    if (!joined) return;
 
     const handleVisibilityChange = async () => {
-      if (document.hidden && videoEnabled && localVideoRef.current) {
-        // Page is hidden, try to enter PiP
+      if (document.hidden) {
+        // Page is hidden, try to enter PiP with active speaker
         try {
-          const video = localVideoRef.current;
-          // Only try PiP if video is ready (has metadata loaded)
-          if (document.pictureInPictureEnabled && !document.pictureInPictureElement && video.readyState >= 2) {
-            await video.requestPictureInPicture();
-            setIsPiPActive(true);
+          if (document.pictureInPictureEnabled && !document.pictureInPictureElement) {
+            const videoToShow = getActiveSpeakerVideo();
+            if (videoToShow && videoToShow.readyState >= 2) {
+              await videoToShow.requestPictureInPicture();
+              setIsPiPActive(true);
+            }
           }
         } catch (err) {
           console.log('PiP not available:', err);
@@ -167,18 +186,16 @@ const VideoRoom = () => {
       setIsPiPActive(!!document.pictureInPictureElement);
     };
 
-    const videoElement = localVideoRef.current;
-    
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    videoElement?.addEventListener('enterpictureinpicture', handlePiPChange);
-    videoElement?.addEventListener('leavepictureinpicture', handlePiPChange);
+    document.addEventListener('enterpictureinpicture', handlePiPChange);
+    document.addEventListener('leavepictureinpicture', handlePiPChange);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      videoElement?.removeEventListener('enterpictureinpicture', handlePiPChange);
-      videoElement?.removeEventListener('leavepictureinpicture', handlePiPChange);
+      document.removeEventListener('enterpictureinpicture', handlePiPChange);
+      document.removeEventListener('leavepictureinpicture', handlePiPChange);
     };
-  }, [joined, videoEnabled]);
+  }, [joined, getActiveSpeakerVideo]);
 
   useEffect(() => {
     const init = async () => {
@@ -636,7 +653,8 @@ const VideoRoom = () => {
   const toggleScreenShare = async () => {
     if (screenSharing) {
       if (screenStreamRef.current) {
-        removeScreenShareTrack(screenStreamRef.current);
+        // Pass camera stream to restore video after screen share ends
+        removeScreenShareTrack(screenStreamRef.current, localStreamRef.current);
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
@@ -655,8 +673,7 @@ const VideoRoom = () => {
         // Request screen share with options that work on mobile
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ 
           video: {
-            cursor: 'always',
-            displaySurface: 'monitor'
+            cursor: 'always'
           },
           audio: false // Audio capture often not supported on mobile
         });
@@ -670,7 +687,8 @@ const VideoRoom = () => {
         
         screenStream.getVideoTracks()[0].onended = () => {
           if (screenStreamRef.current) {
-            removeScreenShareTrack(screenStreamRef.current);
+            // Pass camera stream to restore video after screen share ends
+            removeScreenShareTrack(screenStreamRef.current, localStreamRef.current);
             screenStreamRef.current = null;
           }
           setScreenSharing(false);
@@ -697,13 +715,18 @@ const VideoRoom = () => {
     }
   };
 
-  // Toggle Picture-in-Picture manually
+  // Toggle Picture-in-Picture manually - shows active speaker
   const togglePiP = async () => {
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
-      } else if (localVideoRef.current && document.pictureInPictureEnabled) {
-        const video = localVideoRef.current;
+      } else if (document.pictureInPictureEnabled) {
+        // Get the active speaker's video
+        const video = getActiveSpeakerVideo();
+        if (!video) {
+          toast.error('No video available for Picture-in-Picture');
+          return;
+        }
         // Check if video has loaded metadata
         if (video.readyState < 2) {
           // Wait for metadata to load
@@ -1427,11 +1450,11 @@ const VideoRoom = () => {
         >
           <Hand className="w-5 h-5 sm:w-6 sm:h-6" />
         </button>
-        {document.pictureInPictureEnabled && videoEnabled && (
+        {document.pictureInPictureEnabled && (videoEnabled || participants.length > 1) && (
           <button
             onClick={togglePiP}
             className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl transition-all ${isPiPActive ? 'bg-purple-500 hover:bg-purple-600 text-white' : 'bg-zinc-800 hover:bg-zinc-700 text-white'}`}
-            title={isPiPActive ? 'Exit Picture-in-Picture' : 'Float video (Picture-in-Picture)'}
+            title={isPiPActive ? 'Exit Picture-in-Picture' : 'Float call (shows active speaker)'}
           >
             <PictureInPicture2 className="w-5 h-5 sm:w-6 sm:h-6" />
           </button>
