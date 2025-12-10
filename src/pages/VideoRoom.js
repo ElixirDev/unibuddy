@@ -151,8 +151,10 @@ const VideoRoom = () => {
       if (document.hidden && videoEnabled && localVideoRef.current) {
         // Page is hidden, try to enter PiP
         try {
-          if (document.pictureInPictureEnabled && !document.pictureInPictureElement) {
-            await localVideoRef.current.requestPictureInPicture();
+          const video = localVideoRef.current;
+          // Only try PiP if video is ready (has metadata loaded)
+          if (document.pictureInPictureEnabled && !document.pictureInPictureElement && video.readyState >= 2) {
+            await video.requestPictureInPicture();
             setIsPiPActive(true);
           }
         } catch (err) {
@@ -701,13 +703,29 @@ const VideoRoom = () => {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
       } else if (localVideoRef.current && document.pictureInPictureEnabled) {
-        await localVideoRef.current.requestPictureInPicture();
+        const video = localVideoRef.current;
+        // Check if video has loaded metadata
+        if (video.readyState < 2) {
+          // Wait for metadata to load
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timeout')), 3000);
+            video.addEventListener('loadedmetadata', () => {
+              clearTimeout(timeout);
+              resolve();
+            }, { once: true });
+          });
+        }
+        await video.requestPictureInPicture();
       } else {
         toast.error('Picture-in-Picture is not supported');
       }
     } catch (err) {
       console.error('PiP error:', err);
-      toast.error('Failed to toggle Picture-in-Picture');
+      if (err.message === 'Timeout') {
+        toast.error('Video not ready for Picture-in-Picture');
+      } else {
+        toast.error('Failed to toggle Picture-in-Picture');
+      }
     }
   };
 
@@ -796,7 +814,12 @@ const VideoRoom = () => {
         {/* Video */}
         {isLocal ? (
           <video
-            ref={localVideoRef}
+            ref={el => {
+              localVideoRef.current = el;
+              if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+                el.srcObject = localStreamRef.current;
+              }
+            }}
             autoPlay
             muted
             playsInline
